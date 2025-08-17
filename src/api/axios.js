@@ -1,28 +1,21 @@
 import axios from "axios";
 
 /* -------------------------------------------------------
-   API URL çözümü (sorunsuz fallsbacks)
+   API URL çözümü (fallback öncelik sırası)
    -------------------------------------------------------
-   1) VITE_API_URL (.env)
-   2) window.__API_URL__ (runtime override istersek)
-   3) Dev: :5173 ise backend 5000’e gider
-   4) Prod: aynı origin üzerinden /api
+   1) .env → VITE_API_URL
+   2) window.__API_URL__ (runtime override)
+   3) Dev (localhost:5173) → backend 5000
+   4) Prod → aynı origin üzerinden /api
 ------------------------------------------------------- */
-const fromEnv =
-  (typeof import.meta !== "undefined" &&
-    import.meta.env &&
-    import.meta.env.VITE_API_URL) ||
-  "";
+const fromEnv = import.meta?.env?.VITE_API_URL || "";
+const fromWindow = typeof window !== "undefined" ? window.__API_URL__ : "";
+const isDev = typeof window !== "undefined" && window.location.port === "5173";
 
-const fromWindow =
-  typeof window !== "undefined" && window.__API_URL__
-    ? window.__API_URL__
-    : "";
-
-const isDev5173 =
-  typeof window !== "undefined" && window.location && window.location.port === "5173";
-
-const API_URL = fromEnv || fromWindow || (isDev5173 ? "http://localhost:5000/api" : "/api");
+const API_URL =
+  fromEnv ||
+  fromWindow ||
+  (isDev ? "http://localhost:5000/api" : "/api");
 
 /* -------------------------------------------------------
    Basit toast pub/sub
@@ -41,28 +34,25 @@ function toast(msg, type = "info") {
 const api = axios.create({
   baseURL: API_URL,
   withCredentials: false,
-  timeout: 15000,
+  timeout: 20000, // 20s daha güvenli
   headers: { "X-Requested-With": "XMLHttpRequest" },
 });
 
 /* -------------------------------------------------------
-   Request: Authorization taşı
+   Request Interceptor → Token ekle
 ------------------------------------------------------- */
 api.interceptors.request.use((config) => {
-  try {
-    const token = localStorage.getItem("token");
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-  } catch {}
+  const token = localStorage.getItem("token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 /* -------------------------------------------------------
-   Response: Hata yakalama (401/403/409/422/400/network)
+   Response Interceptor → Hata yönetimi
 ------------------------------------------------------- */
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
-    // Network/CORS
     if (!err.response) {
       toast("Sunucuya ulaşılamadı. İnternet/CORS kontrol edin.", "error");
       return Promise.reject(err);
@@ -70,17 +60,12 @@ api.interceptors.response.use(
 
     const { status, data, statusText } = err.response;
 
-    // Blob JSON ise mesajı çözmeye çalış
+    // Hata mesajını çıkar
     let message = "";
     try {
       if (data instanceof Blob) {
         const text = await data.text();
-        try {
-          const parsed = JSON.parse(text);
-          message = parsed?.message || statusText || "Hata";
-        } catch {
-          message = text || statusText || "Hata";
-        }
+        message = JSON.parse(text)?.message || text;
       } else if (typeof data === "string") {
         message = data;
       } else {
@@ -90,41 +75,32 @@ api.interceptors.response.use(
       message = "Hata";
     }
 
-    // express-validator tarzı validation detayları
-    const valErrs = Array.isArray(data?.errors) ? data.errors : null;
-    if (valErrs && valErrs.length) {
-      const first = valErrs[0];
-      const det =
-        (first?.path ? `${first.path}: ` : "") + (first?.msg || first?.message || "");
-      toast(`Doğrulama hatası: ${det || message}`, "error");
+    // Validation hataları
+    if (Array.isArray(data?.errors) && data.errors.length) {
+      const first = data.errors[0];
+      toast(
+        `Doğrulama hatası: ${(first?.path ? `${first.path}: ` : "") + (first?.msg || first?.message || "")}`,
+        "error"
+      );
       return Promise.reject(err);
     }
 
     // Status bazlı aksiyonlar
-    if (status === 401) {
-      toast("Oturum süreniz doldu. Lütfen tekrar giriş yapın.", "warn");
-      try { localStorage.clear(); } catch {}
-      setTimeout(() => (window.location.href = "/login"), 400);
-      return Promise.reject(err);
-    }
+    const statusMap = {
+      401: () => {
+        toast("Oturum süreniz doldu. Lütfen tekrar giriş yapın.", "warn");
+        localStorage.clear();
+        setTimeout(() => (window.location.href = "/login"), 400);
+      },
+      403: () => toast("Bu işlem için yetkiniz yok.", "error"),
+      409: () => toast(message || "Çakışma/uygunsuzluk hatası.", "error"),
+      400: () => toast(message || "Geçersiz istek.", "error"),
+      422: () => toast(message || "Geçersiz istek.", "error"),
+    };
 
-    if (status === 403) {
-      toast("Bu işlem için yetkiniz yok.", "error");
-      return Promise.reject(err);
-    }
+    if (statusMap[status]) statusMap[status]();
+    else toast(message || "Beklenmeyen hata.", "error");
 
-    if (status === 409) {
-      toast(message || "Çakışma/uygunsuzluk hatası.", "error");
-      return Promise.reject(err);
-    }
-
-    if (status === 422 || status === 400) {
-      toast(message || "Geçersiz istek.", "error");
-      return Promise.reject(err);
-    }
-
-    // Diğer durumlar
-    toast(message || "Beklenmeyen hata.", "error");
     return Promise.reject(err);
   }
 );

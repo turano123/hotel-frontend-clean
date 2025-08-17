@@ -1,39 +1,22 @@
-# --- Dependencies ---
+@"
+# Node / Vite
 node_modules/
-
-# --- Build output ---
 dist/
-dist-ssr/
-*.local
+frontend/node_modules/
+frontend/dist/
 
-# --- Logs ---
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-*.log
-
-# --- Environment (örnek hariç) ---
-.env
-.env.*
-!.env.example
-
-# --- Editor & OS ---
+# Vercel & IDE
+.vercel/
 .vscode/
-.idea/
 .DS_Store
 Thumbs.db
 
-# --- Caches ---
-.eslintcache
-.cache/
-.parcel-cache/
-.turbo/
-vite.cache/
+# Env
+.env
+.env.*
+frontend/.env
+backend/.env
 
-# --- Tests / Coverage ---
-coverage/
-
-# --- Misc ---
-*.tgz
+# Big files
+*.zip
+"@ | Set-Content -Encoding utf8 .gitignore
